@@ -244,3 +244,80 @@ test('пустой ввод и некорректные даты', () => {
   assert.equal(STN.formatMoney(1380000), '1 380 000 ₽');
   assert.equal(STN.formatDate('2026-04-30'), '30.04.2026');
 });
+
+// ---------------------------------------------------------------------------
+// Документы-ловушки из fixtures/variants (сгенерированы адверсариальным прогоном, ожидания — в EXPECTED.md)
+// ---------------------------------------------------------------------------
+
+const VDIR = path.join(__dirname, '..', 'fixtures', 'variants');
+const variant = prefix => {
+  const name = fs.readdirSync(VDIR).find(n => n.startsWith(prefix) && n.endsWith('.txt'));
+  return { name, text: fs.readFileSync(path.join(VDIR, name), 'utf8') };
+};
+
+test('варианты: другой формат номера, «руб.», сумма прописью впереди, копейки, «Срок поставки: до …»', () => {
+  const r = STN.analyze([variant('01_'), variant('02_'), variant('03_')], { checkDate: CHECK });
+  const rows = r.contracts.map(c => [c.contractNo, c.sum.value, c.deadline.value]).sort((x, y) => x[0].localeCompare(y[0]));
+  assert.deepEqual(rows, [
+    ['0219-ПТ', 945000, '2026-04-22'],
+    ['17/2026-П', 1200000, '2026-05-15'],
+    ['СМ-2026/018', 1800000, '2026-03-25'],
+  ]);
+});
+
+test('варианты: ДС «с момента подписания», ДС только о сроке («продлить … до»), ссылка «от <дата> № <номер>», письмо с пятью датами', () => {
+  const files = [variant('01_'), variant('04_'), variant('05_'), variant('07_'), variant('12_')];
+  const r = STN.analyze(files, { checkDate: CHECK });
+  assert.deepEqual(r.contracts.map(c => c.contractNo), ['17/2026-П']);
+  const c = r.contracts[0];
+  assert.equal(c.sum.value, 1420000);
+  assert.equal(c.sum.original.value, 1200000);
+  assert.equal(c.deadline.value, '2026-05-29');
+  assert.equal(c.deadline.changedBy.fileName, variant('05_').name);
+  assert.deepEqual(c.deadline.proposals.map(p => [p.kind, p.value]), [['letter', '2026-06-12']]);
+  assert.deepEqual(r.unlinked, []);
+});
+
+test('варианты: стоимость и неустойка в одном абзаце, CRLF с BOM, лишние пробелы и неразрывные пробелы', () => {
+  const r = STN.analyze([variant('08_'), variant('10_'), variant('11_')], { checkDate: CHECK });
+  const sums = Object.fromEntries(r.contracts.map(c => [c.contractNo, [c.sum.value, c.deadline.value]]));
+  assert.equal(r.contracts.length, 3);
+  assert.ok(Object.values(sums).every(([s, d]) => s && d), JSON.stringify(sums));
+  // позиции абзацев указывают на исходный текст даже при CRLF и BOM
+  const d10 = r.documents[1];
+  for (const p of d10.paragraphs) assert.equal(variant('10_').text.slice(p.start, p.end), p.text);
+});
+
+test('варианты: относительный срок («30 дней с даты оплаты») → «нужна проверка», инициалы поставщика не обрезаются', () => {
+  const c = STN.analyze([variant('09_')], { checkDate: CHECK }).contracts[0];
+  assert.equal(c.deadline.state, 'needs_review');
+  assert.equal(c.deadline.value, null);
+  assert.match(c.supplier.value, /^ИП Соколов А\.В\.$/);
+});
+
+test('приращение суммы в ДС («увеличить … на 150 000 рублей») не принимается за новую сумму', () => {
+  const ds = `ДОПОЛНИТЕЛЬНОЕ СОГЛАШЕНИЕ № 3 К ДОГОВОРУ STN-101
+Дата: 05.03.2026
+Статус: подписано обеими сторонами 05.03.2026.
+
+1. Увеличить общую стоимость поставки на 150 000 рублей.
+2. Настоящее соглашение вступает в силу 05.03.2026.
+`;
+  const c = byNo(STN.analyze([loadFixtures()[0], { name: 'ds3.txt', text: ds }], { checkDate: CHECK }), 'STN-101');
+  assert.equal(c.sum.state, 'needs_review');
+  assert.notEqual(c.sum.value, 150000);
+  assert.match(c.sum.note, /не удалось извлечь/);
+});
+
+test('подписанное действующее ДС с нераспознанными изменениями переводит поля в «нужна проверка»', () => {
+  const ds = `ДОПОЛНИТЕЛЬНОЕ СОГЛАШЕНИЕ № 4 К ДОГОВОРУ STN-102
+Дата: 05.03.2026
+Статус: подписано обеими сторонами 05.03.2026.
+
+1. В пункте 3.1 договора дату «20.03.2026» заменить датой «29.03.2026».
+2. Настоящее соглашение вступает в силу 05.03.2026.
+`;
+  const c = byNo(STN.analyze([loadFixtures()[2], { name: 'ds4.txt', text: ds }], { checkDate: CHECK }), 'STN-102');
+  assert.equal(c.deadline.state, 'needs_review');
+  assert.equal(c.sum.state, 'needs_review');
+});

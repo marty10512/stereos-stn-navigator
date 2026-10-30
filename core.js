@@ -23,7 +23,7 @@
   const DATE_RE = /(\d{2})\.(\d{2})\.(\d{4})/;
   const DATE_RE_G = /\d{2}\.\d{2}\.\d{4}/g;
   // «1 200 000 (один миллион двести тысяч) рублей», «252 000 рублей», «900000 руб.»
-  const MONEY_RE_G = /(\d{1,3}(?:[   ]\d{3})+|\d+)(?:\s*\([^)]*\))?\s*(?:руб|₽)/gi;
+  const MONEY_RE_G = /(\d{1,3}(?:[   ]\d{3})+|\d+)(?:,\d{2})?(?:\s*\([^)]*\))?\s*(?:руб|₽)/gi;
 
   /** 'DD.MM.YYYY' → 'YYYY-MM-DD' или null, если дата некорректна. */
   function toISO(ddmmyyyy) {
@@ -57,8 +57,10 @@
     const re = /[^\n]+/g;
     let m;
     while ((m = re.exec(text)) !== null) {
-      if (m[0].trim() === '') continue;
-      out.push({ index: out.length, text: m[0].trim(), start: m.index, end: m.index + m[0].length });
+      const trimmed = m[0].trim();
+      if (trimmed === '') continue;
+      const start = m.index + m[0].indexOf(trimmed);
+      out.push({ index: out.length, text: trimmed, start, end: start + trimmed.length });
     }
     return out;
   }
@@ -86,14 +88,16 @@
       label: 'Сумма договора',
       format: formatMoney,
       // Упоминание суммы, которая не является суммой договора: аванс, лимит, неустойка.
-      isDistractor: s => /(аванс|лимит|неустойк|штраф|не\s+является\s+(согласованной\s+)?стоимостью)/i.test(s),
+      isDistractor: s => /(аванс|лимит|неустойк|штраф|не\s+является\s+(согласованной\s+)?стоимостью)/i.test(s.split(/составляет/i)[0]),
       // «Общая стоимость … не указана / определяется спецификацией (приложением)».
       isAbsent: s => /стоимост/i.test(s) && /(не\s+указан|не\s+установлен|не\s+определен|определяется\s+(спецификацией|приложением))/i.test(s),
       // Действующая редакция: «Общая стоимость поставки составляет 1 200 000 … рублей».
-      isClause: s => /общ(ая|ую|ей)\s+стоимост/i.test(s) && /составляет/i.test(s),
+      isClause: s => /(общ(ая|ую|ей)\s+стоимост|цена\s+договора|стоимость\s+договора)/i.test(s) && /составляет/i.test(s),
       // Предложение или изменение: «изменить общую стоимость … на 1 450 000 рублей».
-      isChange: s => /стоимост/i.test(s) && /(изменить|установить|увелич|уменьш|перенести|составит\b)/i.test(s) && /\sна\s+\d/.test(s),
-      parseClause: s => { const m = /составляет\s+(\d[\d   ]*)\s*(?:\([^)]*\))?\s*(?:руб|₽)/i.exec(s); return m ? parseMoney(m[1]) : null; },
+      // «увеличить стоимость на 150 000 рублей» — приращение, итог без исходного значения не посчитать → «нужна проверка».
+      isIncrement: s => /стоимост/i.test(s) && /(увелич|уменьш)[а-яё]*\s/i.test(s) && /\sна\s+\d/.test(s),
+      isChange: s => /стоимост/i.test(s) && /(изменить|установить|перенести|составит\b)/i.test(s) && /\sна\s+\d/.test(s),
+      parseClause: s => { const m = /составляет\s+(?:[а-яё\s]+\()?(\d[\d   ]*)(?:,\d{2})?\)?\s*(?:\([^)]*\))?\s*(?:руб|₽)/i.exec(s); return m ? parseMoney(m[1]) : null; },
       parseChange: s => { const m = lastMatch(MONEY_RE_G, s); return m ? parseMoney(m[1]) : null; },
     },
     deadline: {
@@ -103,11 +107,16 @@
       isDistractor: s => /(оплат|приемк|приёмк|платеж|платёж)/i.test(s) && !/обязуется\s+поставить/i.test(s),
       isAbsent: s => /срок[а-яё]*\s+поставки/i.test(s) && /не\s+(указан|установлен|определ)/i.test(s),
       // «Поставщик обязуется поставить … не позднее 15.04.2026» / «Срок поставки — до 15.04.2026».
-      isClause: s => /(обязуется\s+поставить|поставить\s+[^.]*?не\s+позднее|срок[а-яё]*\s+поставки\s*[—:–-]?\s*(не\s+позднее|до)\s+\d)/i.test(s),
+      isClause: s => /(обязуется\s+поставить|поставить\s+[^.]*?не\s+позднее|срок[а-яё]*\s+поставки\s*[—:–-]?\s*(не\s+позднее\s+|до\s+)?\d{2}\.\d{2}\.\d{4})/i.test(s),
       // «перенести срок поставки с 20.03.2026 на 27.03.2026», «изменить срок поставки на 10.05.2026».
-      isChange: s => /(срок[а-яё]*\s+поставки|поставить)/i.test(s) && /\sна\s+\d{2}\.\d{2}\.\d{4}/.test(s),
-      parseClause: s => { const m = /(не\s+позднее|до)\s+(\d{2}\.\d{2}\.\d{4})/i.exec(s); return m ? toISO(m[2]) : null; },
-      parseChange: s => { const m = lastMatch(/\sна\s+(\d{2}\.\d{2}\.\d{4})/g, s); return m ? toISO(m[1]) : null; },
+      isChange: s => /(срок[а-яё]*\s+поставки|поставить)/i.test(s) && /\s(на|до)\s+\d{2}\.\d{2}\.\d{4}/.test(s),
+      parseClause: s => {
+        const m = /(?:поставить|поставки)[^.]*?(не\s+позднее|до)\s+(\d{2}\.\d{2}\.\d{4})/i.exec(s)
+          || /(не\s+позднее|до)\s+(\d{2}\.\d{2}\.\d{4})/i.exec(s)
+          || /срок[а-яё]*\s+поставки\s*([—:–-])\s*(\d{2}\.\d{2}\.\d{4})/i.exec(s);
+        return m ? toISO(m[2]) : null;
+      },
+      parseChange: s => { const m = /(?:срок[а-яё]*\s+поставки|поставить)[^]*?\s(?:на|до)\s+(\d{2}\.\d{2}\.\d{4})/i.exec(s); return m ? toISO(m[1]) : null; },
     },
   };
 
@@ -129,7 +138,9 @@
         if (f.isClause(s)) {
           const value = f.parseClause(s);
           if (value != null) { hits.push({ kind: 'value', value, paragraphIndex: p.index, quote: s }); continue; }
+          if (!f.isChange(s)) { hits.push({ kind: 'unparsed', value: null, paragraphIndex: p.index, quote: s }); continue; }
         }
+        if (f.isIncrement && f.isIncrement(s)) { hits.push({ kind: 'unparsed', value: null, paragraphIndex: p.index, quote: s }); continue; }
         if (f.isChange(s)) {
           const value = f.parseChange(s);
           if (value != null) hits.push({ kind: 'change', value, paragraphIndex: p.index, quote: s });
@@ -176,8 +187,8 @@
   /** Ссылка на договор из документа, который к нему относится (ДС, проект, письмо). */
   function referencedContract(paragraphs) {
     const head = paragraphs.slice(0, 6).map(p => p.text).join('\n');
-    let m = /к\s+договору\s+(?:поставки\s+)?(?:№\s*)?([^\s,;]+)/i.exec(head);
-    if (!m) m = /договор[а-яё]*\s+(?:№\s*)?([A-Za-zА-Яа-я]{0,8}-?\d[A-Za-z0-9\-\/]*)/i.exec(paragraphs.map(p => p.text).join('\n'));
+    let m = /к\s+договору\s+(?:поставки\s+)?(?:от\s+\d{2}\.\d{2}\.\d{4}\s+)?(?:№\s*)?([^\s,;]+)/i.exec(head);
+    if (!m) m = /договор[а-яё]*\s+(?:№\s*)?([A-Za-zА-Яа-я]{0,8}-?\d[A-Za-zА-Яа-яЁё0-9\-\/]*)/i.exec(paragraphs.map(p => p.text).join('\n'));
     return m ? m[1].replace(/[.,;:]+$/, '') : null;
   }
 
@@ -210,7 +221,7 @@
     for (const p of paragraphs) {
       const m = /вступ[а-яё]+\s+в\s+силу\s+(?:с\s+)?(\d{2}\.\d{2}\.\d{4})/i.exec(p.text);
       if (m) return { date: toISO(m[1]), paragraphIndex: p.index };
-      if (/вступ[а-яё]+\s+в\s+силу\s+(с\s+)?(момента|даты|дня)\s+(его\s+)?подписания/i.test(p.text) && signedDate) {
+      if (/вступ[а-яё]+\s+в\s+силу\s+(со?\s+)?(момента|даты|дня)\s+(его\s+)?подписания/i.test(p.text) && signedDate) {
         return { date: signedDate, paragraphIndex: p.index };
       }
     }
@@ -218,7 +229,7 @@
   }
 
   function detectParty(paragraphs, role) {
-    const re = new RegExp(role + ':\\s*([^.\\n]+?)(?:\\.|$)', 'i');
+    const re = new RegExp(role + ':\\s*(.+?)(?:(?<![А-ЯЁA-Z])\\.)?(?=\\s+(?:Покупатель|Поставщик):|\\s*$)', 'i');
     for (const p of paragraphs) {
       const m = re.exec(p.text);
       if (m) return { value: m[1].trim(), paragraphIndex: p.index, quote: m[0].trim() };
@@ -288,6 +299,8 @@
       field.note = 'В договоре значение не указано.';
       return field;
     }
+    const unparsed = hits.filter(h => h.kind === 'unparsed');
+    if (distinct.length === 0 && unparsed.length) { field.evidence = evidence(doc, unparsed[0]); return reviewField(field, 'Пункт найден, но значение не удалось извлечь (формулировка или относительный срок).'); }
     if (distinct.length === 0) {
       field.note = `В тексте договора не найдено: ${f.label.toLowerCase()}.`;
       return field;
@@ -312,6 +325,7 @@
     const flags = [];
     if (contracts.length > 1) flags.push(`Загружено ${contracts.length} документа с номером договора ${contractNo}; использован ${contractDoc.name}.`);
     if (!contractDoc) flags.push('Сам договор не загружен — показаны только относящиеся к нему документы.');
+    if (contractDoc && contractDoc.status !== 'signed') flags.push(`${contractDoc.name}: подписание договора обеими сторонами не подтверждено текстом — условия предварительные.`);
 
     const view = {
       contractNo, contractDocId: contractDoc ? contractDoc.id : null,
@@ -333,10 +347,15 @@
 
     for (const { doc, cls } of amendments) {
       let touched = 0;
+      const unparsedFields = [];
       for (const fieldId of FIELD_IDS) {
         const f = FIELDS[fieldId];
-        const hits = findField(fieldId, doc.paragraphs).filter(h => h.kind !== 'absent');
-        if (hits.length === 0) continue;
+        const allHits = findField(fieldId, doc.paragraphs).filter(h => h.kind !== 'absent');
+        const hits = allHits.filter(h => h.kind !== 'unparsed');
+        if (hits.length === 0) {
+          if (allHits.length) unparsedFields.push({ fieldId, hit: allHits[0] });
+          continue;
+        }
         touched++;
         const field = view[fieldId];
         const distinct = [...new Set(hits.map(h => h.value))];
@@ -358,7 +377,15 @@
           if (cls.review) reviewField(field, `${cls.label} (${doc.name}).`);
         }
       }
-      if (touched === 0) flags.push(`${doc.name}: документ относится к договору, но изменяемые условия не распознаны — проверьте вручную.`);
+      // Пункт про поле найден, но значение не извлечено (приращение, замена даты «в кавычках», свободная формулировка).
+      for (const { fieldId, hit } of unparsedFields) {
+        if (cls.apply) { view[fieldId].evidence = view[fieldId].evidence || evidence(doc, hit); reviewField(view[fieldId], `В ${doc.name} условие изменено, но новое значение не удалось извлечь: «${hit.quote}»`); }
+        else flags.push(`${doc.name}: предлагаемое изменение не распознано — «${hit.quote}».`);
+      }
+      if (touched === 0 && unparsedFields.length === 0) {
+        if (cls.apply) for (const fieldId of FIELD_IDS) reviewField(view[fieldId], `Подписанное допсоглашение ${doc.name} вступило в силу, но его изменения не распознаны.`);
+        else flags.push(`${doc.name}: документ относится к договору, но изменяемые условия не распознаны — проверьте вручную.`);
+      }
     }
 
     // Письма: всегда только сведения для проверки.
@@ -366,7 +393,7 @@
       let touched = 0;
       for (const fieldId of FIELD_IDS) {
         const f = FIELDS[fieldId];
-        for (const h of findField(fieldId, doc.paragraphs).filter(h => h.kind !== 'absent')) {
+        for (const h of findField(fieldId, doc.paragraphs).filter(h => h.kind === 'change')) {
           touched++;
           view[fieldId].proposals.push({ docId: doc.id, fileName: doc.name, kind: 'letter', kindLabel: 'Письмо поставщика', value: h.value, display: f.format(h.value), evidence: evidence(doc, h), note: 'Предложение не согласовано: допсоглашение не подписано.' });
         }
