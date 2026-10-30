@@ -261,13 +261,13 @@
     } else {
       if (f.state === 'needs_review') td.appendChild(h('span', { class: 'badge warn', text: 'нужна проверка' }));
       if (f.display && !(f.state === 'needs_review' && f.display === 'нужна проверка')) td.appendChild(h('span', { class: 'val', text: f.display }));
-      if (f.note) td.appendChild(h('div', { class: 'small line' + (f.state === 'needs_review' ? '' : ' muted'), text: f.note }));
+      if (f.note && !(f.changedBy && f.state === 'ok')) td.appendChild(h('div', { class: 'small line' + (f.state === 'needs_review' ? '' : ' muted'), text: f.note }));
     }
     if (f.evidence) td.appendChild(h('div', { class: 'line' }, [evLink(f.evidence)]));
     if (f.changedBy) {
       td.appendChild(h('div', { class: 'small line' }, [
         h('span', { class: 'badge ok', text: 'изменено' }),
-        'изменено: ' + f.changedBy.fileName + ' (в силе с ' + fmtDate(f.changedBy.effectiveDate) + ')'
+        f.changedBy.fileName + ' (в силе с ' + fmtDate(f.changedBy.effectiveDate) + ')'
       ]));
       if (f.original) {
         td.appendChild(h('div', { class: 'line' }, [
@@ -347,9 +347,6 @@
     (STN.QUESTIONS || []).forEach(function (q) {
       var prev = asked[q.id] || {};
       var params = q.params || [];
-      var label = String(q.label)
-        .replace('{checkDate}', fmtDate(result.checkDate))
-        .replace('{contractNo}', '').replace('{date}', '').replace(/\s+/g, ' ').trim();
       // Подстановка параметров: выбор делается в самой форме, поэтому в подписи остаются места под контролы.
       var form = h('form');
       var sel = null, dt = null;
