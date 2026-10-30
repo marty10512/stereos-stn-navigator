@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Проверка условий договоров поставки</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --text:#1d2330; --muted:#7a8394; --line:#e1e5ec; --accent:#2457c5; --warn-bg:#fff3c4; --warn:#8a6100; --err-bg:#fde4e4; --err:#9b1c1c; --ok-bg:#e0f4e6; --ok:#17673a; --hl:#fff1a8; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; }
+  body { font:14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; color:var(--text); background:var(--bg); }
+  #main { max-width:1100px; margin:0 auto; padding:20px 24px 60px; overflow-wrap:anywhere; }
+  body.viewer-open #main { margin-right:min(540px, 46vw); margin-left:16px; max-width:none; }
+  h1 { font-size:22px; margin:0 0 14px; }
+  h2 { font-size:16px; margin:0 0 10px; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:16px; margin-bottom:16px; }
+  .controls { display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
+  label.inline { display:flex; gap:8px; align-items:center; }
+  input[type=date], select { font:inherit; padding:5px 8px; border:1px solid var(--line); border-radius:6px; background:#fff; }
+  button { font:inherit; padding:6px 12px; border:1px solid var(--line); border-radius:6px; background:#fff; cursor:pointer; }
+  button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  button:hover { filter:brightness(.96); }
+  #drop { margin-top:12px; border:2px dashed #b9c2d3; border-radius:8px; padding:16px; text-align:center; color:var(--muted); }
+  #drop.over { border-color:var(--accent); background:#eef3fd; color:var(--accent); }
+  table { width:100%; border-collapse:collapse; table-layout:fixed; }
+  th, td { text-align:left; vertical-align:top; padding:8px 10px; border-bottom:1px solid var(--line); }
+  th { font-size:12px; color:var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:.03em; }
+  tr.flags td { background:#fffaf0; color:var(--warn); font-size:13px; }
+  .muted { color:var(--muted); }
+  .small { font-size:12.5px; }
+  .badge { display:inline-block; padding:1px 8px; border-radius:10px; font-size:12px; font-weight:600; margin-right:4px; }
+  .badge.warn { background:var(--warn-bg); color:var(--warn); }
+  .badge.err { background:var(--err-bg); color:var(--err); }
+  .badge.ok { background:var(--ok-bg); color:var(--ok); }
+  .badge.gray { background:#eceff4; color:#4a5468; }
+  .val { font-weight:600; }
+  .old { text-decoration:line-through; color:var(--muted); }
+  a.ev { color:var(--accent); cursor:pointer; text-decoration:underline; font-size:12.5px; }
+  .line { margin-top:3px; }
+  ul.plain { list-style:none; padding:0; margin:0; }
+  ul.plain li { padding:6px 0; border-bottom:1px solid var(--line); }
+  ul.plain li:last-child { border-bottom:0; }
+  .q { padding:10px 0; border-bottom:1px solid var(--line); }
+  .q:last-child { border-bottom:0; }
+  .q form { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  .answer { margin-top:8px; padding:8px 10px; background:#f1f5fd; border-left:3px solid var(--accent); border-radius:4px; }
+  #empty { color:var(--muted); text-align:center; padding:24px; }
+  #fatal { background:var(--err-bg); color:var(--err); padding:16px; border-radius:8px; margin-bottom:16px; }
+  #viewer { position:fixed; top:0; right:0; bottom:0; width:min(540px, 46vw); background:#fff; border-left:1px solid var(--line); box-shadow:-4px 0 16px rgba(0,0,0,.08); display:none; flex-direction:column; z-index:10; }
+  body.viewer-open #viewer { display:flex; }
+  #viewer header { padding:12px 14px; border-bottom:1px solid var(--line); display:flex; gap:10px; align-items:flex-start; }
+  #viewer header .t { flex:1; overflow-wrap:anywhere; }
+  #viewer .body { overflow:auto; padding:12px 14px 40px; flex:1; }
+  #viewer p { margin:0 0 10px; padding:4px 6px; border-radius:4px; white-space:pre-wrap; }
+  #viewer p.hl { background:var(--hl); outline:2px solid #e8c440; }
+  mark { background:#ffd54a; padding:0 1px; border-radius:2px; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<div id="main">
+  <h1>Проверка условий договоров поставки</h1>
+  <div id="fatal" hidden></div>
+
+  <section id="head">
+    <div class="controls">
+      <label class="inline">Дата проверки <input type="date" id="checkDate" value="2026-03-10"></label>
+      <button class="primary" id="pick" type="button">Выбрать файлы…</button>
+      <button id="clear" type="button">Очистить</button>
+      <input type="file" id="fileInput" multiple accept=".txt" hidden>
+    </div>
+    <div id="drop">Или перетащите TXT-файлы сюда</div>
+  </section>
+
+  <section id="docsSec" hidden>
+    <h2>Загруженные документы</h2>
+    <div id="docs"></div>
+  </section>
+
+  <div id="empty">Загрузите TXT-файлы договоров, допсоглашений и писем. Пример — папка fixtures/documents</div>
+
+  <section id="tableSec" hidden>
+    <h2 id="tableTitle"></h2>
+    <table>
+      <thead><tr><th style="width:12%">Договор</th><th style="width:22%">Поставщик</th><th style="width:33%">Сумма</th><th style="width:33%">Срок поставки</th></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </section>
+
+  <section id="propSec" hidden>
+    <h2>Несогласованные предложения и документы на проверку</h2>
+    <div id="props"></div>
+  </section>
+
+  <section id="qSec" hidden>
+    <h2>Вопросы</h2>
+    <div id="questions"></div>
+  </section>
+</div>
+
+<aside id="viewer" aria-label="Просмотр документа">
+  <header>
+    <div class="t"><div id="vTitle" style="font-weight:600"></div><div id="vMeta" class="small muted"></div></div>
+    <button id="vClose" type="button" aria-label="Закрыть">Закрыть ✕</button>
+  </header>
+  <div class="body" id="vBody"></div>
+</aside>
+
+<script src="core.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  var DEFAULT_CHECK = '2026-03-10';
+  var DEFAULT_Q_DATE = '2026-04-01';
+  var STN = window.STN;
+  var $ = function (id) { return document.getElementById(id); };
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  // Безопасный конструктор DOM: весь текст идёт через textContent / createTextNode.
+  function h(tag, attrs, kids) {
+    var el = document.createElement(tag);
+    if (attrs) Object.keys(attrs).forEach(function (k) {
+      if (k === 'class') el.className = attrs[k];
+      else if (k === 'text') el.textContent = attrs[k];
+      else if (k.indexOf('on') === 0) el.addEventListener(k.slice(2), attrs[k]);
+      else el.setAttribute(k, attrs[k]);
+    });
+    (kids || []).forEach(function (c) {
+      if (c == null || c === false) return;
+      el.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+    });
+    return el;
+  }
+  function clear(el) { while (el.firstChild) el.removeChild(el.firstChild); }
+  function fmtDate(d) { return d ? STN.formatDate(d) : '—'; }
+
+  if (!STN || typeof STN.analyze !== 'function') {
+    var f = $('fatal');
+    f.hidden = false;
+    f.textContent = 'Не удалось загрузить core.js: файл должен лежать рядом с index.html. Логика проверки недоступна.';
+    $('empty').hidden = true;
+    ['pick', 'clear', 'checkDate'].forEach(function (id) { $(id).disabled = true; });
+    return;
+  }
+
+  var files = [];        // [{name, text}]
+  var result = null;
+  var asked = {};        // id -> последние параметры вопроса (пересчитываются при смене данных)
+  var viewerDocId = null;
+
+  // ---------- загрузка файлов ----------
+  function readFile(file) {
+    return new Promise(function (resolve) {
+      var r = new FileReader();
+      r.onload = function () { resolve({ name: file.name, text: String(r.result) }); };
+      r.onerror = function () { resolve({ name: file.name, text: '' }); };
+      r.readAsText(file, 'utf-8');
+    });
+  }
+  function addFiles(list) {
+    var arr = Array.prototype.slice.call(list || []);
+    if (!arr.length) return;
+    Promise.all(arr.map(readFile)).then(function (read) {
+      read.forEach(function (nf) {
+        var i = files.findIndex(function (x) { return x.name === nf.name; });
+        if (i >= 0) files[i] = nf; else files.push(nf);   // повторная загрузка того же имени заменяет файл
+      });
+      recompute();
+    });
+  }
+  $('pick').addEventListener('click', function () { $('fileInput').click(); });
+  $('fileInput').addEventListener('change', function (e) { addFiles(e.target.files); e.target.value = ''; });
+  $('clear').addEventListener('click', function () { files = []; asked = {}; closeViewer(); recompute(); });
+  $('checkDate').addEventListener('change', recompute);
+  var drop = $('drop');
+  ['dragenter', 'dragover'].forEach(function (ev) {
+    document.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add('over'); });
+  });
+  ['dragleave', 'drop'].forEach(function (ev) {
+    document.addEventListener(ev, function (e) { e.preventDefault(); if (ev === 'drop' || e.target === document || !e.relatedTarget) drop.classList.remove('over'); });
+  });
+  document.addEventListener('drop', function (e) { addFiles(e.dataTransfer && e.dataTransfer.files); });
+
+  // ---------- пересчёт ----------
+  function recompute() {
+    var checkDate = $('checkDate').value || DEFAULT_CHECK;
+    try {
+      result = STN.analyze(files.map(function (f) { return { name: f.name, text: f.text }; }), { checkDate: checkDate });
+    } catch (err) {
+      result = null;
+      var fb = $('fatal'); fb.hidden = false; fb.textContent = 'Ошибка анализа: ' + (err && err.message ? err.message : err);
+      return;
+    }
+    $('fatal').hidden = true;
+    render();
+  }
+
+  function render() {
+    var has = files.length > 0 && result;
+    $('empty').hidden = has;
+    ['docsSec', 'tableSec', 'propSec', 'qSec'].forEach(function (id) { $(id).hidden = !has; });
+    if (!has) { return; }
+    renderDocs(); renderTable(); renderProposals(); renderQuestions();
+    if (viewerDocId) {
+      var d = findDoc(viewerDocId);
+      if (d) renderViewer(d, null); else closeViewer();
+    }
+  }
+
+  function findDoc(id) {
+    return result && result.documents.filter(function (d) { return d.id === id; })[0] || null;
+  }
+
+  // ---------- ссылки-основания ----------
+  function evLink(ev, label) {
+    if (!ev) return null;
+    return h('a', {
+      class: 'ev', href: '#', text: label || ('Основание: ' + ev.fileName),
+      title: ev.quote || '',
+      onclick: function (e) { e.preventDefault(); openViewer(ev.docId, ev); }
+    });
+  }
+
+  // ---------- документы ----------
+  function renderDocs() {
+    var box = $('docs'); clear(box);
+    var ul = h('ul', { class: 'plain' });
+    result.documents.forEach(function (d) {
+      var li = h('li');
+      li.appendChild(h('a', { class: 'ev', href: '#', text: d.name, style: 'font-size:14px;font-weight:600',
+        onclick: function (e) { e.preventDefault(); openViewer(d.id, null); } }));
+      li.appendChild(document.createTextNode(' '));
+      li.appendChild(h('span', { class: 'badge gray', text: d.kindLabel }));
+      li.appendChild(h('span', { class: 'badge ' + (d.status === 'signed' ? 'ok' : (d.status === 'unknown' ? 'err' : 'warn')), text: d.statusLabel }));
+      var meta = [];
+      meta.push('договор: ' + (d.contractNo || 'не определён'));
+      meta.push('дата документа: ' + fmtDate(d.docDate));
+      if (d.effectiveDate) meta.push('в силе с: ' + fmtDate(d.effectiveDate));
+      li.appendChild(h('div', { class: 'small muted line', text: meta.join(' · ') }));
+      (d.warnings || []).forEach(function (w) {
+        li.appendChild(h('div', { class: 'small line', style: 'color:var(--warn)', text: '⚠ ' + w }));
+      });
+      ul.appendChild(li);
+    });
+    box.appendChild(ul);
+  }
+
+  // ---------- таблица ----------
+  function fieldCell(f, isMoney) {
+    var td = h('td');
+    if (!f) { td.appendChild(h('span', { class: 'muted', text: 'нет данных' })); return td; }
+    if (f.state === 'no_data') {
+      td.appendChild(h('span', { class: 'muted', text: 'нет данных' }));
+      if (f.note) td.appendChild(h('div', { class: 'small muted line', text: f.note }));
+    } else {
+      if (f.state === 'needs_review') td.appendChild(h('span', { class: 'badge warn', text: 'нужна проверка' }));
+      if (f.display && !(f.state === 'needs_review' && f.display === 'нужна проверка')) td.appendChild(h('span', { class: 'val', text: f.display }));
+      if (f.note) td.appendChild(h('div', { class: 'small line' + (f.state === 'needs_review' ? '' : ' muted'), text: f.note }));
+    }
+    if (f.evidence) td.appendChild(h('div', { class: 'line' }, [evLink(f.evidence)]));
+    if (f.changedBy) {
+      td.appendChild(h('div', { class: 'small line' }, [
+        h('span', { class: 'badge ok', text: 'изменено' }),
+        'изменено: ' + f.changedBy.fileName + ' (в силе с ' + fmtDate(f.changedBy.effectiveDate) + ')'
+      ]));
+      if (f.original) {
+        td.appendChild(h('div', { class: 'line' }, [
+          h('span', { class: 'old', text: f.original.display }), ' ',
+          evLink(f.original.evidence, 'Основание (исходное): ' + f.original.evidence.fileName)
+        ]));
+      }
+    }
+    if (f.proposals && f.proposals.length) {
+      td.appendChild(h('div', { class: 'small line', style: 'color:var(--warn)', text: 'есть несогласованные предложения: ' + f.proposals.length }));
+    }
+    return td;
+  }
+
+  function renderTable() {
+    $('tableTitle').textContent = 'Договоры по состоянию на ' + fmtDate(result.checkDate);
+    var tb = $('tbody'); clear(tb);
+    if (!result.contracts.length) {
+      tb.appendChild(h('tr', null, [h('td', { colspan: '4', class: 'muted', text: 'Договоры не найдены.' })]));
+      return;
+    }
+    result.contracts.forEach(function (c) {
+      var first = h('td');
+      first.appendChild(h('strong', { text: c.contractNo }));
+      if (c.contractDocId === null) first.appendChild(h('div', { class: 'line' }, [h('span', { class: 'badge err', text: 'договор не загружен' })]));
+      tb.appendChild(h('tr', null, [first, fieldCell(c.supplier), fieldCell(c.sum, true), fieldCell(c.deadline)]));
+      if (c.flags && c.flags.length) {
+        var fl = h('td', { colspan: '4' });
+        c.flags.forEach(function (t) { fl.appendChild(h('div', { text: '⚠ ' + t })); });
+        tb.appendChild(h('tr', { class: 'flags' }, [fl]));
+      }
+    });
+  }
+
+  // ---------- предложения ----------
+  var FIELD_NAMES = { supplier: 'Поставщик', buyer: 'Покупатель', sum: 'Сумма', deadline: 'Срок поставки' };
+  function renderProposals() {
+    var box = $('props'); clear(box);
+    var ul = h('ul', { class: 'plain' });
+    var n = 0;
+    result.contracts.forEach(function (c) {
+      Object.keys(FIELD_NAMES).forEach(function (k) {
+        var f = c[k];
+        if (!f || !f.proposals) return;
+        f.proposals.forEach(function (p) {
+          n++;
+          var li = h('li');
+          li.appendChild(h('strong', { text: c.contractNo + ' · ' + FIELD_NAMES[k] + ': ' }));
+          li.appendChild(h('span', { class: 'val', text: p.display }));
+          li.appendChild(document.createTextNode(' '));
+          li.appendChild(h('span', { class: 'badge warn', text: p.kindLabel }));
+          li.appendChild(h('div', { class: 'small muted line', text: 'Файл: ' + p.fileName }));
+          if (p.note) li.appendChild(h('div', { class: 'small line', text: p.note }));
+          li.appendChild(h('div', { class: 'line' }, [evLink(p.evidence)]));
+          ul.appendChild(li);
+        });
+      });
+    });
+    (result.unlinked || []).forEach(function (d) {
+      n++;
+      var li = h('li');
+      li.appendChild(h('strong', { text: d.name + ' ' }));
+      li.appendChild(h('span', { class: 'badge err', text: 'нужна проверка' }));
+      li.appendChild(h('span', { class: 'badge gray', text: d.kindLabel }));
+      li.appendChild(h('div', { class: 'small line', text: 'Документ не привязан ни к одному договору.' }));
+      (d.warnings || []).forEach(function (w) { li.appendChild(h('div', { class: 'small line', style: 'color:var(--warn)', text: '⚠ ' + w })); });
+      li.appendChild(h('div', { class: 'line' }, [h('a', { class: 'ev', href: '#', text: 'Открыть документ',
+        onclick: function (e) { e.preventDefault(); openViewer(d.id, null); } })]));
+      ul.appendChild(li);
+    });
+    if (n) box.appendChild(ul); else box.appendChild(h('div', { class: 'muted', text: 'Нет' }));
+  }
+
+  // ---------- вопросы ----------
+  function renderQuestions() {
+    var box = $('questions'); clear(box);
+    (STN.QUESTIONS || []).forEach(function (q) {
+      var prev = asked[q.id] || {};
+      var params = q.params || [];
+      var label = String(q.label)
+        .replace('{checkDate}', fmtDate(result.checkDate))
+        .replace('{contractNo}', '').replace('{date}', '').replace(/\s+/g, ' ').trim();
+      // Подстановка параметров: выбор делается в самой форме, поэтому в подписи остаются места под контролы.
+      var form = h('form');
+      var sel = null, dt = null;
+      var parts = String(q.label).split(/(\{contractNo\}|\{date\}|\{checkDate\})/);
+      var labelEl = h('span');
+      parts.forEach(function (p) {
+        if (p === '{contractNo}') {
+          sel = h('select');
+          result.contracts.forEach(function (c) {
+            var o = h('option', { value: c.contractNo, text: c.contractNo });
+            if (prev.contractNo === c.contractNo) o.selected = true;
+            sel.appendChild(o);
+          });
+          labelEl.appendChild(sel);
+        } else if (p === '{date}') {
+          dt = h('input', { type: 'date', value: prev.date || DEFAULT_Q_DATE });
+          labelEl.appendChild(dt);
+        } else if (p === '{checkDate}') {
+          labelEl.appendChild(document.createTextNode(fmtDate(result.checkDate)));
+        } else labelEl.appendChild(document.createTextNode(p));
+      });
+      // Параметр есть в params, но не в шаблоне — добавить контрол отдельно.
+      if (!sel && params.indexOf('contractNo') >= 0) {
+        sel = h('select');
+        result.contracts.forEach(function (c) { sel.appendChild(h('option', { value: c.contractNo, text: c.contractNo })); });
+        labelEl.appendChild(sel);
+      }
+      if (!dt && params.indexOf('date') >= 0) {
+        dt = h('input', { type: 'date', value: prev.date || DEFAULT_Q_DATE });
+        labelEl.appendChild(dt);
+      }
+      var btn = h('button', { type: 'submit', class: 'primary', text: 'Ответить' });
+      form.appendChild(labelEl); form.appendChild(btn);
+      var out = h('div');
+      var wrap = h('div', { class: 'q' }, [form, out]);
+      function ask() {
+        var qp = { id: q.id };
+        if (sel) qp.contractNo = sel.value;
+        if (dt) qp.date = dt.value;
+        asked[q.id] = qp;
+        showAnswer(out, qp);
+      }
+      form.addEventListener('submit', function (e) { e.preventDefault(); ask(); });
+      box.appendChild(wrap);
+      if (asked[q.id]) ask();
+      if (sel && !sel.value && result.contracts.length === 0) btn.disabled = true;
+    });
+  }
+
+  function showAnswer(out, qp) {
+    clear(out);
+    var ans;
+    try { ans = STN.answer(result, qp); } catch (err) {
+      out.appendChild(h('div', { class: 'answer', text: 'Ошибка: ' + (err && err.message ? err.message : err) }));
+      return;
+    }
+    var box = h('div', { class: 'answer' });
+    box.appendChild(h('div', { class: 'val', text: ans.text }));
+    (ans.items || []).forEach(function (it) {
+      var f = it.field;
+      var row = h('div', { class: 'small line' });
+      row.appendChild(document.createTextNode(it.contractNo + ': ' + (f ? f.display : '') + ' '));
+      if (it.unconfirmedDeadlineChange) row.appendChild(h('span', { class: 'badge warn', text: 'несогласованное изменение срока' }));
+      if (f && f.state === 'needs_review') row.appendChild(h('span', { class: 'badge warn', text: 'нужна проверка' }));
+      box.appendChild(row);
+      if (f) {
+        if (f.evidence) box.appendChild(h('div', null, [evLink(f.evidence)]));
+        (f.proposals || []).forEach(function (p) {
+          box.appendChild(h('div', { class: 'small' }, [
+            p.kindLabel + ': ' + p.display + ' — ',
+            evLink(p.evidence, 'Основание: ' + p.fileName)
+          ]));
+        });
+      }
+    });
+    out.appendChild(box);
+  }
+
+  // ---------- просмотрщик ----------
+  function renderViewer(doc, ev) {
+    viewerDocId = doc.id;
+    $('vTitle').textContent = doc.name;
+    $('vMeta').textContent = doc.kindLabel + ' · ' + doc.statusLabel;
+    var body = $('vBody'); clear(body);
+    var target = null;
+    doc.paragraphs.forEach(function (p) {
+      var el = h('p', { id: 'p-' + esc(doc.id) + '-' + p.index });
+      var isTarget = ev && ev.docId === doc.id && ev.paragraphIndex === p.index;
+      var pos = isTarget && ev.quote ? p.text.indexOf(ev.quote) : -1;
+      if (pos >= 0) {
+        el.appendChild(document.createTextNode(p.text.slice(0, pos)));
+        el.appendChild(h('mark', { text: ev.quote }));
+        el.appendChild(document.createTextNode(p.text.slice(pos + ev.quote.length)));
+      } else {
+        el.textContent = p.text;
+      }
+      if (isTarget) { el.classList.add('hl'); target = el; }
+      body.appendChild(el);
+    });
+    document.body.classList.add('viewer-open');
+    if (target) target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    else body.scrollTop = 0;
+  }
+  function openViewer(docId, ev) {
+    var d = findDoc(docId);
+    if (d) renderViewer(d, ev);
+  }
+  function closeViewer() {
+    viewerDocId = null;
+    document.body.classList.remove('viewer-open');
+  }
+  $('vClose').addEventListener('click', closeViewer);
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeViewer(); });
+
+  recompute();
+})();
+</script>
+</body>
+</html>
