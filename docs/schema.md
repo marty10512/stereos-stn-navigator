@@ -10,6 +10,10 @@ STN.answer(result, question)        // -> Answer
 STN.QUESTIONS                       // -> массив описаний вопросов для UI
 STN.formatDate(iso)                 // 'YYYY-MM-DD' -> 'DD.MM.YYYY'
 STN.formatMoney(n)                  // 1380000 -> '1 380 000 ₽'
+STN.FIELDS                          // реестр полей; ключи = поля ContractView помимо supplier/buyer (sum, deadline, …)
+STN.parseDocument(file, id)         // -> ParsedDoc
+STN.findField(fieldId, paragraphs)  // -> находки { kind: 'value'|'change'|'absent'|'unparsed', value, paragraphIndex, quote }
+STN.toISO('DD.MM.YYYY')             // -> 'YYYY-MM-DD' | null
 ```
 
 - `files`: `Array<{ name: string, text: string }>` — имя и содержимое загруженных TXT.
@@ -31,7 +35,7 @@ type ParsedDoc = {
   kind: 'contract' | 'amendment' | 'amendment_draft' | 'letter' | 'unknown';
   kindLabel: string;              // 'Договор' | 'Допсоглашение' | 'Проект допсоглашения' | 'Письмо' | 'Не распознан'
   status: 'signed' | 'draft' | 'proposal' | 'unknown';
-  statusLabel: string;            // 'Подписано обеими сторонами' | 'Проект, не подписан' | 'Предложение, не согласовано' | 'Статус не определён'
+  statusLabel: string;            // 'Подписано обеими сторонами' | 'Проект, не подписано' | 'Предложение, не согласовано' | 'Статус не определён'
   contractNo: string | null;      // номер договора, к которому относится документ ('STN-101')
   docDate: string | null;         // ISO
   effectiveDate: string | null;   // ISO, дата вступления в силу (для допсоглашений)
@@ -62,8 +66,10 @@ type FieldValue = {
 type Proposal = {
   docId: string;
   fileName: string;
-  kind: 'amendment_draft' | 'letter' | 'amendment_not_effective' | 'amendment_unsigned';
-  kindLabel: string;              // 'Проект допсоглашения' | 'Письмо поставщика' | 'Допсоглашение, ещё не вступило в силу' | ...
+  kind: 'amendment_draft' | 'letter' | 'amendment_not_effective' | 'amendment_unsigned' | 'amendment_unclear';
+  kindLabel: string;              // 'Проект допсоглашения' | 'Письмо поставщика' | 'Допсоглашение подписано, вступает в силу DD.MM.YYYY — позже даты проверки'
+                                  // | 'Допсоглашение подписано DD.MM.YYYY — позже даты проверки' | 'Допсоглашение, подписание не подтверждено'
+                                  // | 'Допсоглашение подписано, дата вступления в силу не найдена'
   value: any;
   display: string;
   evidence: Evidence;
@@ -110,7 +116,7 @@ type Answer = {
 ## Правила, которые реализует core (для понимания UI)
 
 - Условия договора меняет только документ `kind='amendment'` со `status='signed'` и `effectiveDate <= checkDate`.
-- Подписанное ДС с датой вступления в силу позже даты проверки → предложение `amendment_not_effective`.
+- Подписанное ДС с датой подписания или вступления в силу позже даты проверки → `amendment_not_effective` (в ответах — «подписано, но ещё не действует», не «несогласованное»).
 - Проект ДС и письмо → предложения, таблицу не меняют.
 - Значения не найдены → `no_data`; противоречие или неясность → `needs_review` с `note`.
 - Никакие имена файлов и конкретные значения в код не вшиты.

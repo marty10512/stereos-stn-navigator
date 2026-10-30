@@ -321,3 +321,56 @@ test('подписанное действующее ДС с нераспозна
   assert.equal(c.deadline.state, 'needs_review');
   assert.equal(c.sum.state, 'needs_review');
 });
+
+// ---------------------------------------------------------------------------
+// Находки финального ревью
+// ---------------------------------------------------------------------------
+
+test('ДС цитирует старую и новую редакцию в одном предложении → «нужна проверка», а не старое значение как «изменено»', () => {
+  const ds = `ДОПОЛНИТЕЛЬНОЕ СОГЛАШЕНИЕ № 5 К ДОГОВОРУ STN-101
+Дата: 01.03.2026
+Статус: подписано обеими сторонами 01.03.2026.
+
+1. Пункт 2.1 договора («Общая стоимость поставки составляет 1 200 000 рублей») изложить в следующей редакции: «Общая стоимость поставки составляет 1 380 000 рублей, включая НДС».
+2. Пункт 3.1 договора («Поставщик обязуется поставить оборудование не позднее 15.04.2026») изложить в следующей редакции: «Поставщик обязуется поставить оборудование не позднее 30.04.2026».
+3. Настоящее соглашение вступает в силу 01.03.2026.
+`;
+  const c = byNo(STN.analyze([loadFixtures()[0], { name: 'ds5.txt', text: ds }], { checkDate: CHECK }), 'STN-101');
+  assert.equal(c.sum.state, 'needs_review');
+  assert.equal(c.deadline.state, 'needs_review');
+  assert.equal(c.sum.changedBy, null);
+  assert.match(STN.answer(r0(), { id: 'deadline', contractNo: 'STN-101' }).text, /30\.04\.2026/); // учебный комплект по-прежнему верен
+  function r0() { return STN.analyze(loadFixtures(), { checkDate: CHECK }); }
+});
+
+test('письмо со ссылкой «по договору поставки № STN-102» привязывается; непривязанные документы упоминаются в ответе', () => {
+  const letter = `ПИСЬМО ПОСТАВЩИКА
+Дата: 05.03.2026
+От: ООО «Контур Электро»
+
+По договору поставки № STN-102 от 10.02.2026 предлагаем перенести срок поставки с 20.03.2026 на 27.03.2026.
+`;
+  const r = STN.analyze([loadFixtures()[2], { name: 'l.txt', text: letter }], { checkDate: CHECK });
+  assert.deepEqual(byNo(r, 'STN-102').deadline.proposals.map(p => [p.kind, p.value]), [['letter', '2026-03-27']]);
+  assert.deepEqual(r.unlinked, []);
+
+  const r2 = STN.analyze([loadFixtures()[2], { name: 'junk.txt', text: 'Заметка без структуры.' }], { checkDate: CHECK });
+  assert.match(STN.answer(r2, { id: 'before', date: '2026-04-01' }).text, /Не привязаны к договорам и не учтены: junk\.txt/);
+});
+
+test('ДС, подписанное после даты проверки с ретроактивной датой вступления в силу, не применяется', () => {
+  const ds = `ДОПОЛНИТЕЛЬНОЕ СОГЛАШЕНИЕ № 6 К ДОГОВОРУ STN-102
+Дата: 12.03.2026
+Статус: подписано обеими сторонами 12.03.2026.
+
+1. Пункт 2.1 договора изложить в следующей редакции: «Общая стоимость поставки составляет 900 000 рублей, включая НДС».
+2. Настоящее соглашение вступает в силу 05.03.2026.
+`;
+  const files = [loadFixtures()[2], { name: 'ds6.txt', text: ds }];
+  const c = byNo(STN.analyze(files, { checkDate: CHECK }), 'STN-102');
+  assert.equal(c.sum.value, 840000);
+  assert.deepEqual(c.sum.proposals.map(p => [p.kind, p.value]), [['amendment_not_effective', 900000]]);
+  assert.match(STN.answer(STN.analyze(files, { checkDate: CHECK }), { id: 'sum', contractNo: 'STN-102' }).text, /Подписано, но ещё не действует: 900 000 ₽/);
+  assert.doesNotMatch(STN.answer(STN.analyze(files, { checkDate: CHECK }), { id: 'sum', contractNo: 'STN-102' }).text, /Несогласованные/);
+  assert.equal(byNo(STN.analyze(files, { checkDate: '2026-03-20' }), 'STN-102').sum.value, 900000);
+});

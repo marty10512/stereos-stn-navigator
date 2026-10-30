@@ -116,12 +116,6 @@
   var STN = window.STN;
   var $ = function (id) { return document.getElementById(id); };
 
-  function esc(s) {
-    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
-      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
-    });
-  }
-
   // Безопасный конструктор DOM: весь текст идёт через textContent / createTextNode.
   function h(tag, attrs, kids) {
     var el = document.createElement(tag);
@@ -252,7 +246,7 @@
   }
 
   // ---------- таблица ----------
-  function fieldCell(f, isMoney) {
+  function fieldCell(f) {
     var td = h('td');
     if (!f) { td.appendChild(h('span', { class: 'muted', text: 'нет данных' })); return td; }
     if (f.state === 'no_data') {
@@ -277,7 +271,10 @@
       }
     }
     if (f.proposals && f.proposals.length) {
-      td.appendChild(h('div', { class: 'small line', style: 'color:var(--warn)', text: 'есть несогласованные предложения: ' + f.proposals.length }));
+      var unconfirmed = f.proposals.filter(function (p) { return p.kind !== 'amendment_not_effective'; }).length;
+      var pending = f.proposals.length - unconfirmed;
+      if (unconfirmed) td.appendChild(h('div', { class: 'small line', style: 'color:var(--warn)', text: 'есть несогласованные предложения: ' + unconfirmed }));
+      if (pending) td.appendChild(h('div', { class: 'small line', style: 'color:var(--warn)', text: 'подписано, но ещё не действует: ' + pending }));
     }
     return td;
   }
@@ -293,7 +290,7 @@
       var first = h('td');
       first.appendChild(h('strong', { text: c.contractNo }));
       if (c.contractDocId === null) first.appendChild(h('div', { class: 'line' }, [h('span', { class: 'badge err', text: 'договор не загружен' })]));
-      tb.appendChild(h('tr', null, [first, fieldCell(c.supplier), fieldCell(c.sum, true), fieldCell(c.deadline)]));
+      tb.appendChild(h('tr', null, [first, fieldCell(c.supplier), fieldCell(c.sum), fieldCell(c.deadline)]));
       if (c.flags && c.flags.length) {
         var fl = h('td', { colspan: '4' });
         c.flags.forEach(function (t) { fl.appendChild(h('div', { text: '⚠ ' + t })); });
@@ -346,7 +343,6 @@
     var box = $('questions'); clear(box);
     (STN.QUESTIONS || []).forEach(function (q) {
       var prev = asked[q.id] || {};
-      var params = q.params || [];
       // Подстановка параметров: выбор делается в самой форме, поэтому в подписи остаются места под контролы.
       var form = h('form');
       var sel = null, dt = null;
@@ -368,16 +364,6 @@
           labelEl.appendChild(document.createTextNode(fmtDate(result.checkDate)));
         } else labelEl.appendChild(document.createTextNode(p));
       });
-      // Параметр есть в params, но не в шаблоне — добавить контрол отдельно.
-      if (!sel && params.indexOf('contractNo') >= 0) {
-        sel = h('select');
-        result.contracts.forEach(function (c) { sel.appendChild(h('option', { value: c.contractNo, text: c.contractNo })); });
-        labelEl.appendChild(sel);
-      }
-      if (!dt && params.indexOf('date') >= 0) {
-        dt = h('input', { type: 'date', value: prev.date || DEFAULT_Q_DATE });
-        labelEl.appendChild(dt);
-      }
       var btn = h('button', { type: 'submit', class: 'primary', text: 'Ответить' });
       form.appendChild(labelEl); form.appendChild(btn);
       var out = h('div');
@@ -433,7 +419,7 @@
     var body = $('vBody'); clear(body);
     var target = null;
     doc.paragraphs.forEach(function (p) {
-      var el = h('p', { id: 'p-' + esc(doc.id) + '-' + p.index });
+      var el = h('p');
       var isTarget = ev && ev.docId === doc.id && ev.paragraphIndex === p.index;
       var pos = isTarget && ev.quote ? p.text.indexOf(ev.quote) : -1;
       if (pos >= 0) {

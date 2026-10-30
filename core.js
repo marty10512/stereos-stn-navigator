@@ -21,7 +21,6 @@
   // ---------------------------------------------------------------------------
 
   const DATE_RE = /(\d{2})\.(\d{2})\.(\d{4})/;
-  const DATE_RE_G = /\d{2}\.\d{2}\.\d{4}/g;
   // «1 200 000 (один миллион двести тысяч) рублей», «252 000 рублей», «900000 руб.»
   const MONEY_RE_G = /(\d{1,3}(?:[   ]\d{3})+|\d+)(?:,\d{2})?(?:\s*\([^)]*\))?\s*(?:руб|₽)/gi;
 
@@ -70,6 +69,12 @@
     return text.split(/(?<=[.!?»])\s+(?=[А-ЯЁA-Z«(\d])/).map(s => s.trim()).filter(Boolean);
   }
 
+  /** Одно уникальное значение из списка кандидатов; несколько разных → null (поле уйдёт в «нужна проверка»). */
+  function uniqueOrNull(values) {
+    const u = [...new Set(values.filter(v => v != null))];
+    return u.length === 1 ? u[0] : null;
+  }
+
   function lastMatch(re, s) {
     let last = null, m;
     const g = new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g');
@@ -79,8 +84,11 @@
 
   // ---------------------------------------------------------------------------
   // Реестр полей. Чтобы добавить поле (например, ставку неустойки), достаточно
-  // описать его здесь: как узнать предложение с действующей редакцией, как —
-  // предложение об изменении, как — явное отсутствие, и как вытащить значение.
+  // описать его здесь. Обязательны: label, format, isClause (предложение с действующей
+  // редакцией), parseClause (значение из него). Необязательны: isDistractor (похожее
+  // упоминание, которое надо пропустить), isAbsent (явное «не указано»), isChange и
+  // parseChange (предложение об изменении), isIncrement (приращение «на N» → проверка).
+  // Таблица, ответы и интерфейс подхватывают новое поле по ключу автоматически.
   // ---------------------------------------------------------------------------
 
   const FIELDS = {
@@ -97,34 +105,48 @@
       // «увеличить стоимость на 150 000 рублей» — приращение, итог без исходного значения не посчитать → «нужна проверка».
       isIncrement: s => /стоимост/i.test(s) && /(увелич|уменьш)[а-яё]*\s/i.test(s) && /\sна\s+\d/.test(s),
       isChange: s => /стоимост/i.test(s) && /(изменить|установить|перенести|составит\b)/i.test(s) && /\sна\s+\d/.test(s),
-      parseClause: s => { const m = /составляет\s+(?:[а-яё\s]+\()?(\d[\d   ]*)(?:,\d{2})?\)?\s*(?:\([^)]*\))?\s*(?:руб|₽)/i.exec(s); return m ? parseMoney(m[1]) : null; },
+      // Все суммы вида «составляет N … рублей» в предложении; две разные (старая и новая редакция) → null → «нужна проверка».
+      parseClause: s => uniqueOrNull([...s.matchAll(/составляет\s+(?:[а-яё\s]+\()?(\d[\d\s]*)(?:,\d{2})?\)?\s*(?:\([^)]*\))?\s*(?:руб|₽)/gi)].map(m => parseMoney(m[1]))),
       parseChange: s => { const m = lastMatch(MONEY_RE_G, s); return m ? parseMoney(m[1]) : null; },
     },
     deadline: {
       label: 'Срок поставки',
       format: formatDate,
       // Сроки оплаты и приёмки — не срок поставки.
-      isDistractor: s => /(оплат|приемк|приёмк|платеж|платёж)/i.test(s) && !/обязуется\s+поставить/i.test(s),
+      isDistractor: s => /(оплат|приемк|приёмк|платеж|платёж)/i.test(s) && !/обязуется\s+поставить/i.test(s) && !/срок[а-яё]*\s+поставки\s*[—:–-]/i.test(s),
       isAbsent: s => /срок[а-яё]*\s+поставки/i.test(s) && /не\s+(указан|установлен|определ)/i.test(s),
       // «Поставщик обязуется поставить … не позднее 15.04.2026» / «Срок поставки — до 15.04.2026».
       isClause: s => /(обязуется\s+поставить|поставить\s+[^.]*?не\s+позднее|срок[а-яё]*\s+поставки\s*[—:–-]?\s*(не\s+позднее\s+|до\s+)?\d{2}\.\d{2}\.\d{4})/i.test(s),
       // «перенести срок поставки с 20.03.2026 на 27.03.2026», «изменить срок поставки на 10.05.2026».
       isChange: s => /(срок[а-яё]*\s+поставки|поставить)/i.test(s) && /\s(на|до)\s+\d{2}\.\d{2}\.\d{4}/.test(s),
       parseClause: s => {
-        const m = /(?:поставить|поставки)[^.]*?(не\s+позднее|до)\s+(\d{2}\.\d{2}\.\d{4})/i.exec(s)
-          || /(не\s+позднее|до)\s+(\d{2}\.\d{2}\.\d{4})/i.exec(s)
-          || /срок[а-яё]*\s+поставки\s*([—:–-])\s*(\d{2}\.\d{2}\.\d{4})/i.exec(s);
-        return m ? toISO(m[2]) : null;
+        // Все даты при «не позднее», «до» и «Срок поставки:»; даты об оплате, авансе или приёмке отбрасываем.
+        // Две разные даты поставки в одном предложении (старая и новая редакция, две партии) → null → «нужна проверка».
+        const dates = [...s.matchAll(/(?:не\s+позднее|до|срок[а-яё]*\s+поставки\s*[—:–-])\s*(\d{2}\.\d{2}\.\d{4})/gi)]
+          .filter(m => !/(оплат|платеж|платёж|аванс|приемк|приёмк)[^.]{0,40}$/i.test(s.slice(0, m.index)))
+          .map(m => toISO(m[1]));
+        return uniqueOrNull(dates);
       },
       parseChange: s => { const m = /(?:срок[а-яё]*\s+поставки|поставить)[^]*?\s(?:на|до)\s+(\d{2}\.\d{2}\.\d{4})/i.exec(s); return m ? toISO(m[1]) : null; },
     },
   };
 
   const FIELD_IDS = Object.keys(FIELDS);
+  for (const f of Object.values(FIELDS)) {
+    f.isDistractor = f.isDistractor || (() => false);
+    f.isAbsent = f.isAbsent || (() => false);
+    f.isChange = f.isChange || (() => false);
+    f.isIncrement = f.isIncrement || (() => false);
+    f.parseChange = f.parseChange || (() => null);
+  }
 
   /**
    * Извлечь из абзацев документа все упоминания поля.
-   * Возвращает массив находок: { kind: 'value'|'change'|'absent', value, paragraphIndex, quote }.
+   * Возвращает массив находок: { kind, value, paragraphIndex, quote }, где kind:
+   *   'value'    — действующая редакция со значением;
+   *   'change'   — предложение или изменение («изменить … на N»);
+   *   'absent'   — явное «не указано / определяется спецификацией» → «нет данных»;
+   *   'unparsed' — пункт о поле найден, значение не извлечено (приращение, две даты, свободная формулировка) → «нужна проверка».
    * Для абзаца «изложить в следующей редакции: «…»» достаточно общего разбора по
    * предложениям: цитата новой редакции содержит ту же формулировку, что и договор.
    */
@@ -133,14 +155,14 @@
     const hits = [];
     for (const p of paragraphs) {
       for (const s of splitSentences(p.text)) {
-        if (f.isAbsent(s)) { hits.push({ kind: 'absent', value: null, paragraphIndex: p.index, quote: s }); continue; }
+        if (f.isAbsent(s)) { hits.push({ kind: f.parseClause(s) != null ? 'unparsed' : 'absent', value: null, paragraphIndex: p.index, quote: s }); continue; }
         if (f.isDistractor(s)) continue;
         if (f.isClause(s)) {
           const value = f.parseClause(s);
           if (value != null) { hits.push({ kind: 'value', value, paragraphIndex: p.index, quote: s }); continue; }
           if (!f.isChange(s)) { hits.push({ kind: 'unparsed', value: null, paragraphIndex: p.index, quote: s }); continue; }
         }
-        if (f.isIncrement && f.isIncrement(s)) { hits.push({ kind: 'unparsed', value: null, paragraphIndex: p.index, quote: s }); continue; }
+        if (f.isIncrement(s)) { hits.push({ kind: 'unparsed', value: null, paragraphIndex: p.index, quote: s }); continue; }
         if (f.isChange(s)) {
           const value = f.parseChange(s);
           if (value != null) hits.push({ kind: 'change', value, paragraphIndex: p.index, quote: s });
@@ -188,7 +210,7 @@
   function referencedContract(paragraphs) {
     const head = paragraphs.slice(0, 6).map(p => p.text).join('\n');
     let m = /к\s+договору\s+(?:поставки\s+)?(?:от\s+\d{2}\.\d{2}\.\d{4}\s+)?(?:№\s*)?([^\s,;]+)/i.exec(head);
-    if (!m) m = /договор[а-яё]*\s+(?:№\s*)?([A-Za-zА-Яа-я]{0,8}-?\d[A-Za-zА-Яа-яЁё0-9\-\/]*)/i.exec(paragraphs.map(p => p.text).join('\n'));
+    if (!m) m = /договор[а-яё]*\s+(?:поставки\s+)?(?:от\s+\d{2}\.\d{2}\.\d{4}\s+)?(?:№\s*)?([A-Za-zА-Яа-я]{0,8}-?\d[A-Za-zА-Яа-яЁё0-9\-\/]*)/i.exec(paragraphs.map(p => p.text).join('\n'));
     return m ? m[1].replace(/[.,;:]+$/, '') : null;
   }
 
@@ -314,6 +336,7 @@
   function classifyAmendment(doc, checkDate) {
     if (doc.kind === 'amendment_draft' || doc.status === 'draft') return { apply: false, kind: 'amendment_draft', label: 'Проект допсоглашения', review: false };
     if (doc.status !== 'signed') return { apply: false, kind: 'amendment_unsigned', label: 'Допсоглашение, подписание не подтверждено', review: true };
+    if (doc.signedDate && doc.signedDate > checkDate) return { apply: false, kind: 'amendment_not_effective', label: `Допсоглашение подписано ${formatDate(doc.signedDate)} — позже даты проверки`, review: false };
     if (!doc.effectiveDate) return { apply: false, kind: 'amendment_unclear', label: 'Допсоглашение подписано, дата вступления в силу не найдена', review: true };
     if (doc.effectiveDate > checkDate) return { apply: false, kind: 'amendment_not_effective', label: `Допсоглашение подписано, вступает в силу ${formatDate(doc.effectiveDate)} — позже даты проверки`, review: false };
     return { apply: true, kind: 'amendment', label: 'Допсоглашение', review: false };
@@ -340,7 +363,7 @@
     for (const fieldId of FIELD_IDS) view[fieldId] = baseField(fieldId, contractDoc);
     if (contracts.length > 1) for (const fieldId of FIELD_IDS) reviewField(view[fieldId], 'Несколько документов с этим номером договора.');
 
-    // Допсоглашения: действующие — по возрастанию даты вступления в силу, затем даты документа.
+    // Допсоглашения по возрастанию даты вступления в силу (если её нет — по дате документа); позднее перекрывает раннее.
     const amendments = docs.filter(d => d.kind === 'amendment' || d.kind === 'amendment_draft')
       .map(d => ({ doc: d, cls: classifyAmendment(d, checkDate) }))
       .sort((a, b) => String(a.doc.effectiveDate || a.doc.docDate || '').localeCompare(String(b.doc.effectiveDate || b.doc.docDate || '')));
@@ -361,10 +384,9 @@
         const distinct = [...new Set(hits.map(h => h.value))];
         if (cls.apply) {
           if (distinct.length > 1) { reviewField(field, `В ${doc.name} несколько разных значений поля.`); continue; }
-          const sameDate = amendments.find(a => a !== undefined && a.doc !== doc && a.cls.apply && a.doc.effectiveDate === doc.effectiveDate
+          const sameDate = amendments.find(a => a.doc !== doc && a.cls.apply && a.doc.effectiveDate === doc.effectiveDate
             && findField(fieldId, a.doc.paragraphs).some(h => h.kind !== 'absent' && h.value !== distinct[0]));
-          if (!field.original && field.state === 'ok') field.original = { value: field.value, display: field.display, evidence: field.evidence };
-          else if (!field.original && field.evidence) field.original = { value: field.value, display: field.display, evidence: field.evidence };
+          if (!field.original && field.evidence) field.original = { value: field.value, display: field.display, evidence: field.evidence };
           field.state = 'ok'; field.value = distinct[0]; field.display = f.format(distinct[0]);
           field.evidence = evidence(doc, hits[0]);
           field.changedBy = { docId: doc.id, fileName: doc.name, effectiveDate: doc.effectiveDate };
@@ -435,9 +457,17 @@
     { id: 'before', label: 'По каким договорам поставка запланирована раньше {date} и есть ли несогласованные изменения срока?', params: ['date'] },
   ];
 
+  /** Подписанное ДС с будущей датой — не «несогласованное предложение», а ещё не действующее изменение. */
+  const isPending = p => p.kind === 'amendment_not_effective';
+  const unconfirmed = field => field.proposals.filter(p => !isPending(p));
+  const listProposals = ps => ps.map(p => `${p.display} (${p.kindLabel.toLowerCase()}, ${p.fileName})`).join('; ');
+
   function describeProposals(field) {
-    if (!field.proposals.length) return '';
-    return ' Несогласованные предложения: ' + field.proposals.map(p => `${p.display} (${p.kindLabel.toLowerCase()}, ${p.fileName})`).join('; ') + '.';
+    let s = '';
+    const u = unconfirmed(field), pend = field.proposals.filter(isPending);
+    if (u.length) s += ' Несогласованные предложения: ' + listProposals(u) + '.';
+    if (pend.length) s += ' Подписано, но ещё не действует: ' + listProposals(pend) + '.';
+    return s;
   }
 
   function describeField(label, field) {
@@ -450,14 +480,14 @@
 
   function answer(result, q) {
     const items = [];
-    const withChange = c => ({ contractNo: c.contractNo, field: c.deadline, unconfirmedDeadlineChange: c.deadline.proposals.length > 0 });
+    const withChange = c => ({ contractNo: c.contractNo, field: c.deadline, unconfirmedDeadlineChange: unconfirmed(c.deadline).length > 0 });
 
     if (q.id === 'deadline' || q.id === 'sum') {
       const c = result.contracts.find(x => x.contractNo === q.contractNo);
       if (!c) return { text: `Договор ${q.contractNo || ''} не загружен.`, items };
       const field = q.id === 'deadline' ? c.deadline : c.sum;
       const label = q.id === 'deadline' ? `Срок поставки по договору ${c.contractNo} на ${formatDate(result.checkDate)}` : `Сумма договора ${c.contractNo}`;
-      items.push({ contractNo: c.contractNo, field, unconfirmedDeadlineChange: c.deadline.proposals.length > 0 });
+      items.push({ ...withChange(c), field });
       return { text: describeField(label, field) + describeProposals(field), items };
     }
 
@@ -471,14 +501,17 @@
       const parts = [];
       if (earlier.length) {
         parts.push(`Поставка раньше ${formatDate(date)} запланирована по договорам: ` + earlier.map(c => `${c.contractNo} (${c.deadline.display})`).join(', ') + '.');
-        const changed = earlier.filter(c => c.deadline.proposals.length);
+        const changed = earlier.filter(c => unconfirmed(c.deadline).length);
         parts.push(changed.length
-          ? 'Несогласованные изменения срока: ' + changed.map(c => `${c.contractNo} — ` + c.deadline.proposals.map(p => `${p.display} (${p.kindLabel.toLowerCase()}, ${p.fileName})`).join('; ')).join('; ') + '.'
+          ? 'Несогласованные изменения срока: ' + changed.map(c => `${c.contractNo} — ` + listProposals(unconfirmed(c.deadline))).join('; ') + '.'
           : 'Несогласованных изменений срока по этим договорам нет.');
+        const pending = earlier.filter(c => c.deadline.proposals.some(isPending));
+        if (pending.length) parts.push('Подписано, но ещё не действует: ' + pending.map(c => `${c.contractNo} — ` + listProposals(c.deadline.proposals.filter(isPending))).join('; ') + '.');
       } else {
         parts.push(`Договоров с поставкой раньше ${formatDate(date)} не найдено.`);
       }
-      if (later.length) parts.push('Позже этой даты: ' + later.map(c => `${c.contractNo} (${c.deadline.display}${c.deadline.proposals.length ? ', есть несогласованное предложение ' + c.deadline.proposals.map(p => p.display).join(', ') : ''})`).join(', ') + '.');
+      if (later.length) parts.push('Позже этой даты: ' + later.map(c => `${c.contractNo} (${c.deadline.display}${unconfirmed(c.deadline).length ? ', есть несогласованное предложение ' + unconfirmed(c.deadline).map(p => p.display).join(', ') : ''})`).join(', ') + '.');
+      if (result.unlinked.length) parts.push('Не привязаны к договорам и не учтены: ' + result.unlinked.map(d => d.name).join(', ') + '.');
       if (review.length) parts.push('Требуют проверки: ' + review.map(c => c.contractNo).join(', ') + '.');
       if (noData.length) parts.push('Срок не найден: ' + noData.map(c => c.contractNo).join(', ') + '.');
       earlier.forEach(c => items.push(withChange(c)));
