@@ -82,7 +82,7 @@
   <section id="tableSec" hidden>
     <h2 id="tableTitle"></h2>
     <table>
-      <thead><tr><th style="width:12%">Договор</th><th style="width:22%">Поставщик</th><th style="width:33%">Сумма</th><th style="width:33%">Срок поставки</th></tr></thead>
+      <thead><tr id="thead"></tr></thead>
       <tbody id="tbody"></tbody>
     </table>
   </section>
@@ -114,6 +114,7 @@
   var DEFAULT_CHECK = '2026-03-10';
   var DEFAULT_Q_DATE = '2026-04-01';
   var STN = window.STN;
+  var FIELD_IDS = STN ? Object.keys(STN.FIELDS) : [];   // столбцы таблицы = реестр полей core.js
   var $ = function (id) { return document.getElementById(id); };
 
   // Безопасный конструктор DOM: весь текст идёт через textContent / createTextNode.
@@ -282,17 +283,19 @@
   function renderTable() {
     $('tableTitle').textContent = 'Договоры по состоянию на ' + fmtDate(result.checkDate);
     var tb = $('tbody'); clear(tb);
+    var head = $('thead'); clear(head);
+    ['Договор', 'Поставщик'].concat(FIELD_IDS.map(function (k) { return STN.FIELDS[k].label; })).forEach(function (t) { head.appendChild(h('th', { text: t })); });
     if (!result.contracts.length) {
-      tb.appendChild(h('tr', null, [h('td', { colspan: '4', class: 'muted', text: 'Договоры не найдены.' })]));
+      tb.appendChild(h('tr', null, [h('td', { colspan: String(2 + FIELD_IDS.length), class: 'muted', text: 'Договоры не найдены.' })]));
       return;
     }
     result.contracts.forEach(function (c) {
       var first = h('td');
       first.appendChild(h('strong', { text: c.contractNo }));
       if (c.contractDocId === null) first.appendChild(h('div', { class: 'line' }, [h('span', { class: 'badge err', text: 'договор не загружен' })]));
-      tb.appendChild(h('tr', null, [first, fieldCell(c.supplier), fieldCell(c.sum), fieldCell(c.deadline)]));
+      tb.appendChild(h('tr', null, [first, fieldCell(c.supplier)].concat(FIELD_IDS.map(function (k) { return fieldCell(c[k]); }))));
       if (c.flags && c.flags.length) {
-        var fl = h('td', { colspan: '4' });
+        var fl = h('td', { colspan: String(2 + FIELD_IDS.length) });
         c.flags.forEach(function (t) { fl.appendChild(h('div', { text: '⚠ ' + t })); });
         tb.appendChild(h('tr', { class: 'flags' }, [fl]));
       }
@@ -300,19 +303,18 @@
   }
 
   // ---------- предложения ----------
-  var FIELD_NAMES = { supplier: 'Поставщик', buyer: 'Покупатель', sum: 'Сумма', deadline: 'Срок поставки' };
   function renderProposals() {
     var box = $('props'); clear(box);
     var ul = h('ul', { class: 'plain' });
     var n = 0;
     result.contracts.forEach(function (c) {
-      Object.keys(FIELD_NAMES).forEach(function (k) {
+      FIELD_IDS.forEach(function (k) {
         var f = c[k];
         if (!f || !f.proposals) return;
         f.proposals.forEach(function (p) {
           n++;
           var li = h('li');
-          li.appendChild(h('strong', { text: c.contractNo + ' · ' + FIELD_NAMES[k] + ': ' }));
+          li.appendChild(h('strong', { text: c.contractNo + ' · ' + STN.FIELDS[k].label + ': ' }));
           li.appendChild(h('span', { class: 'val', text: p.display }));
           li.appendChild(document.createTextNode(' '));
           li.appendChild(h('span', { class: 'badge warn', text: p.kindLabel }));

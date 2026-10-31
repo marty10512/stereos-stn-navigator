@@ -374,3 +374,57 @@ test('ДС, подписанное после даты проверки с ре�
   assert.doesNotMatch(STN.answer(STN.analyze(files, { checkDate: CHECK }), { id: 'sum', contractNo: 'STN-102' }).text, /Несогласованные/);
   assert.equal(byNo(STN.analyze(files, { checkDate: '2026-03-20' }), 'STN-102').sum.value, 900000);
 });
+
+// ---------------------------------------------------------------------------
+// Находки второго круга ревью
+// ---------------------------------------------------------------------------
+
+const dsTo = (no, body, { date = '01.03.2026', status = 'подписано обеими сторонами 01.03.2026.' } = {}) => `ДОПОЛНИТЕЛЬНОЕ СОГЛАШЕНИЕ № 7 К ДОГОВОРУ ${no}
+Дата: ${date}
+Статус: ${status}
+
+${body}
+2. Настоящее соглашение вступает в силу 01.03.2026.
+`;
+
+test('две даты в предложении о поставке → «нужна проверка», а не первая попавшаяся дата', () => {
+  const ds = dsTo('STN-101', '1. Пункт 3.1 договора изложить в следующей редакции: «Поставщик обязуется поставить оборудование не позднее 30.04.2026 и передать документацию до 20.04.2026».');
+  const c = byNo(STN.analyze([loadFixtures()[0], { name: 'ds7.txt', text: ds }], { checkDate: CHECK }), 'STN-101');
+  assert.equal(c.deadline.state, 'needs_review');
+  assert.notEqual(c.deadline.value, '2026-04-20');
+});
+
+test('ДС без даты в «Статус:» с датой документа позже даты проверки не применяется', () => {
+  const ds = dsTo('STN-101', '1. Пункт 3.1 договора изложить в следующей редакции: «Поставщик обязуется поставить оборудование не позднее 25.04.2026».', { date: '15.03.2026', status: 'подписано обеими сторонами.' });
+  const c = byNo(STN.analyze([loadFixtures()[0], { name: 'ds8.txt', text: ds }], { checkDate: CHECK }), 'STN-101');
+  assert.equal(c.deadline.value, '2026-04-15');
+  assert.deepEqual(c.deadline.proposals.map(p => [p.kind, p.value]), [['amendment_not_effective', '2026-04-25']]);
+});
+
+test('вопрос 4 показывает подписанные, но ещё не действующие ДС и у договоров с поставкой позже даты', () => {
+  const ds = dsTo('STN-101', '1. Пункт 3.1 договора изложить в следующей редакции: «Поставщик обязуется поставить оборудование не позднее 25.03.2026».')
+    .replace('вступает в силу 01.03.2026', 'вступает в силу 15.03.2026');
+  const r = STN.analyze([loadFixtures()[0], { name: 'ds9.txt', text: ds }], { checkDate: CHECK });
+  assert.match(STN.answer(r, { id: 'before', date: '2026-04-01' }).text, /Подписано, но ещё не действует: STN-101 — 25\.03\.2026/);
+});
+
+test('привязка: «от … г. №», «поставки товаров №»; письмо о двух договорах не привязывается', () => {
+  const head = (ref) => `ДОПОЛНИТЕЛЬНОЕ СОГЛАШЕНИЕ № 1 ${ref}
+Дата: 01.03.2026
+Статус: подписано обеими сторонами 01.03.2026.
+`;
+  assert.equal(STN.parseDocument({ name: 'a', text: head('К ДОГОВОРУ ПОСТАВКИ ОТ 05.02.2026 Г. № STN-101') }, 'd0').contractNo, 'STN-101');
+  assert.equal(STN.parseDocument({ name: 'b', text: head('К ДОГОВОРУ ПОСТАВКИ ТОВАРОВ № STN-101') }, 'd0').contractNo, 'STN-101');
+  const letter = `ПИСЬМО ПОСТАВЩИКА
+Дата: 05.03.2026
+
+В отличие от договора STN-101, по договору STN-102 предлагаем перенести срок поставки на 27.03.2026.
+`;
+  assert.equal(STN.parseDocument({ name: 'l', text: letter }, 'd0').contractNo, null);
+});
+
+test('бейдж несогласованного изменения срока не ставится в ответе о сумме', () => {
+  const r = STN.analyze(loadFixtures(), { checkDate: CHECK });
+  assert.equal(STN.answer(r, { id: 'sum', contractNo: 'STN-102' }).items[0].unconfirmedDeadlineChange, false);
+  assert.equal(STN.answer(r, { id: 'deadline', contractNo: 'STN-102' }).items[0].unconfirmedDeadlineChange, true);
+});

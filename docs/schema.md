@@ -38,6 +38,7 @@ type ParsedDoc = {
   statusLabel: string;            // 'Подписано обеими сторонами' | 'Проект, не подписано' | 'Предложение, не согласовано' | 'Статус не определён'
   contractNo: string | null;      // номер договора, к которому относится документ ('STN-101')
   docDate: string | null;         // ISO
+  signedDate: string | null;      // ISO, дата подписания из «Статус: подписано … DD.MM.YYYY»
   effectiveDate: string | null;   // ISO, дата вступления в силу (для допсоглашений)
   paragraphs: Paragraph[];        // абзацы исходника с позициями — для просмотра и перехода
   warnings: string[];             // что не удалось разобрать (текст для пользователя)
@@ -60,7 +61,7 @@ type FieldValue = {
   original: { value: any; display: string; evidence: Evidence } | null;  // исходное значение договора, если изменено
   changedBy: { docId: string; fileName: string; effectiveDate: string | null } | null;  // каким документом изменено
   note: string | null;            // пояснение к «нет данных» / «нужна проверка» / «изменено»
-  proposals: Proposal[];          // несогласованные предложения по этому полю
+  proposals: Proposal[];          // не применённые изменения: несогласованные предложения и подписанные, ещё не действующие ДС (kind 'amendment_not_effective')
 };
 
 type Proposal = {

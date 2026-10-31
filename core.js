@@ -88,7 +88,8 @@
   // редакцией), parseClause (значение из него). Необязательны: isDistractor (похожее
   // упоминание, которое надо пропустить), isAbsent (явное «не указано»), isChange и
   // parseChange (предложение об изменении), isIncrement (приращение «на N» → проверка).
-  // Таблица, ответы и интерфейс подхватывают новое поле по ключу автоматически.
+  // Таблица и список предложений в index.html подхватывают новое поле по ключу; вопрос о нём —
+  // запись в QUESTIONS и ветка в answer(). Без isChange изменения поля в ДС не распознаются.
   // ---------------------------------------------------------------------------
 
   const FIELDS = {
@@ -160,12 +161,12 @@
         if (f.isClause(s)) {
           const value = f.parseClause(s);
           if (value != null) { hits.push({ kind: 'value', value, paragraphIndex: p.index, quote: s }); continue; }
-          if (!f.isChange(s)) { hits.push({ kind: 'unparsed', value: null, paragraphIndex: p.index, quote: s }); continue; }
+          hits.push({ kind: 'unparsed', value: null, paragraphIndex: p.index, quote: s }); continue;
         }
         if (f.isIncrement(s)) { hits.push({ kind: 'unparsed', value: null, paragraphIndex: p.index, quote: s }); continue; }
         if (f.isChange(s)) {
           const value = f.parseChange(s);
-          if (value != null) hits.push({ kind: 'change', value, paragraphIndex: p.index, quote: s });
+          hits.push({ kind: value != null ? 'change' : 'unparsed', value, paragraphIndex: p.index, quote: s });
         }
       }
     }
@@ -209,9 +210,13 @@
   /** Ссылка на договор из документа, который к нему относится (ДС, проект, письмо). */
   function referencedContract(paragraphs) {
     const head = paragraphs.slice(0, 6).map(p => p.text).join('\n');
-    let m = /к\s+договору\s+(?:поставки\s+)?(?:от\s+\d{2}\.\d{2}\.\d{4}\s+)?(?:№\s*)?([^\s,;]+)/i.exec(head);
-    if (!m) m = /договор[а-яё]*\s+(?:поставки\s+)?(?:от\s+\d{2}\.\d{2}\.\d{4}\s+)?(?:№\s*)?([A-Za-zА-Яа-я]{0,8}-?\d[A-Za-zА-Яа-яЁё0-9\-\/]*)/i.exec(paragraphs.map(p => p.text).join('\n'));
-    return m ? m[1].replace(/[.,;:]+$/, '') : null;
+    // Номер обязан содержать цифру: иначе «от … г.» или «поставки товаров» дают фантомный договор «Г» / «ТОВАРОВ».
+    const pre = String.raw`(?:поставки\s+)?(?:(?!от\s)[а-яё]+\s+)?(?:от\s+\d{2}\.\d{2}\.\d{4}\s*(?:г\.?\s*)?)?(?:№\s*)?`;
+    const m = new RegExp(String.raw`к\s+договору\s+` + pre + String.raw`([^\s,;]*\d[^\s,;]*)`, 'i').exec(head);
+    if (m) return m[1].replace(/[.,;:]+$/, '');
+    // Письмо с двумя разными договорами — не угадываем, документ уходит в «не привязан».
+    const all = [...paragraphs.map(p => p.text).join('\n').matchAll(new RegExp(String.raw`договор[а-яё]*\s+` + pre + String.raw`([A-Za-zА-Яа-я]{0,8}-?\d[A-Za-zА-Яа-яЁё0-9\-\/]*)`, 'gi'))];
+    return uniqueOrNull(all.map(x => x[1].replace(/[.,;:]+$/, '')));
   }
 
   function detectStatus(kind, paragraphs) {
@@ -336,7 +341,8 @@
   function classifyAmendment(doc, checkDate) {
     if (doc.kind === 'amendment_draft' || doc.status === 'draft') return { apply: false, kind: 'amendment_draft', label: 'Проект допсоглашения', review: false };
     if (doc.status !== 'signed') return { apply: false, kind: 'amendment_unsigned', label: 'Допсоглашение, подписание не подтверждено', review: true };
-    if (doc.signedDate && doc.signedDate > checkDate) return { apply: false, kind: 'amendment_not_effective', label: `Допсоглашение подписано ${formatDate(doc.signedDate)} — позже даты проверки`, review: false };
+    const signed = doc.signedDate || doc.docDate; // без даты в «Статус:» ДС не подписано раньше своей даты
+    if (signed && signed > checkDate) return { apply: false, kind: 'amendment_not_effective', label: `Допсоглашение подписано ${formatDate(signed)} — позже даты проверки`, review: false };
     if (!doc.effectiveDate) return { apply: false, kind: 'amendment_unclear', label: 'Допсоглашение подписано, дата вступления в силу не найдена', review: true };
     if (doc.effectiveDate > checkDate) return { apply: false, kind: 'amendment_not_effective', label: `Допсоглашение подписано, вступает в силу ${formatDate(doc.effectiveDate)} — позже даты проверки`, review: false };
     return { apply: true, kind: 'amendment', label: 'Допсоглашение', review: false };
@@ -487,7 +493,7 @@
       if (!c) return { text: `Договор ${q.contractNo || ''} не загружен.`, items };
       const field = q.id === 'deadline' ? c.deadline : c.sum;
       const label = q.id === 'deadline' ? `Срок поставки по договору ${c.contractNo} на ${formatDate(result.checkDate)}` : `Сумма договора ${c.contractNo}`;
-      items.push({ ...withChange(c), field });
+      items.push({ contractNo: c.contractNo, field, unconfirmedDeadlineChange: q.id === 'deadline' && unconfirmed(field).length > 0 });
       return { text: describeField(label, field) + describeProposals(field), items };
     }
 
@@ -505,12 +511,12 @@
         parts.push(changed.length
           ? 'Несогласованные изменения срока: ' + changed.map(c => `${c.contractNo} — ` + listProposals(unconfirmed(c.deadline))).join('; ') + '.'
           : 'Несогласованных изменений срока по этим договорам нет.');
-        const pending = earlier.filter(c => c.deadline.proposals.some(isPending));
-        if (pending.length) parts.push('Подписано, но ещё не действует: ' + pending.map(c => `${c.contractNo} — ` + listProposals(c.deadline.proposals.filter(isPending))).join('; ') + '.');
       } else {
         parts.push(`Договоров с поставкой раньше ${formatDate(date)} не найдено.`);
       }
       if (later.length) parts.push('Позже этой даты: ' + later.map(c => `${c.contractNo} (${c.deadline.display}${unconfirmed(c.deadline).length ? ', есть несогласованное предложение ' + unconfirmed(c.deadline).map(p => p.display).join(', ') : ''})`).join(', ') + '.');
+      const pending = earlier.concat(later).filter(c => c.deadline.proposals.some(isPending));
+      if (pending.length) parts.push('Подписано, но ещё не действует: ' + pending.map(c => `${c.contractNo} — ` + listProposals(c.deadline.proposals.filter(isPending))).join('; ') + '.');
       if (result.unlinked.length) parts.push('Не привязаны к договорам и не учтены: ' + result.unlinked.map(d => d.name).join(', ') + '.');
       if (review.length) parts.push('Требуют проверки: ' + review.map(c => c.contractNo).join(', ') + '.');
       if (noData.length) parts.push('Срок не найден: ' + noData.map(c => c.contractNo).join(', ') + '.');
