@@ -7,7 +7,7 @@
 Зависимостей нет. Нужен только браузер; для тестов — Node.js 18+ (проверено на 22.14).
 
 ```bash
-git clone <репозиторий> stn-navigator   # или распакуйте архив
+git clone https://github.com/marty10512/stereos-stn-navigator.git stn-navigator
 cd stn-navigator
 open index.html                          # macOS; в Windows — двойной клик по index.html
 node --test                              # тесты
