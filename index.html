@@ -66,6 +66,7 @@
     <div class="controls">
       <label class="inline">Дата проверки <input type="date" id="checkDate" value="2026-03-10"></label>
       <button class="primary" id="pick" type="button">Выбрать файлы…</button>
+      <button id="sample" type="button">Загрузить пример</button>
       <button id="clear" type="button">Очистить</button>
       <input type="file" id="fileInput" multiple accept=".txt" hidden>
     </div>
@@ -77,7 +78,7 @@
     <div id="docs"></div>
   </section>
 
-  <div id="empty">Загрузите TXT-файлы договоров, допсоглашений и писем. Пример — папка fixtures/documents</div>
+  <div id="empty">Загрузите TXT-файлы договоров, допсоглашений и писем. Пример — папка fixtures/documents или кнопка «Загрузить пример»</div>
 
   <section id="tableSec" hidden>
     <h2 id="tableTitle"></h2>
@@ -140,7 +141,7 @@
     f.hidden = false;
     f.textContent = 'Не удалось загрузить core.js: файл должен лежать рядом с index.html. Логика проверки недоступна.';
     $('empty').hidden = true;
-    ['pick', 'clear', 'checkDate'].forEach(function (id) { $(id).disabled = true; });
+    ['pick', 'sample', 'clear', 'checkDate'].forEach(function (id) { $(id).disabled = true; });
     return;
   }
 
@@ -158,17 +159,31 @@
       r.readAsText(file, 'utf-8');
     });
   }
+  function mergeFiles(read) {
+    read.forEach(function (nf) {
+      var i = files.findIndex(function (x) { return x.name === nf.name; });
+      if (i >= 0) files[i] = nf; else files.push(nf);   // повторная загрузка того же имени заменяет файл
+    });
+    recompute();
+  }
   function addFiles(list) {
     var arr = Array.prototype.slice.call(list || []);
     if (!arr.length) return;
-    Promise.all(arr.map(readFile)).then(function (read) {
-      read.forEach(function (nf) {
-        var i = files.findIndex(function (x) { return x.name === nf.name; });
-        if (i >= 0) files[i] = nf; else files.push(nf);   // повторная загрузка того же имени заменяет файл
-      });
-      recompute();
-    });
+    Promise.all(arr.map(readFile)).then(mergeFiles);
   }
+  // Пример грузится через fetch — с диска (file://) браузер его не отдаёт, поэтому там кнопка скрыта
+  var SAMPLE = ['01_contract.txt', '02_amendment_signed.txt', '03_contract.txt', '04_contract.txt', '05_supplier_email.txt', '06_amendment_draft.txt'];
+  if (location.protocol === 'file:') $('sample').hidden = true;
+  $('sample').addEventListener('click', function () {
+    Promise.all(SAMPLE.map(function (name) {
+      return fetch('fixtures/documents/' + name).then(function (r) {
+        if (!r.ok) throw new Error(name + ': ' + r.status);
+        return r.text();
+      }).then(function (text) { return { name: name, text: text }; });
+    })).then(mergeFiles, function (err) {
+      alert('Не удалось загрузить пример (' + err.message + '). Файлы лежат в папке fixtures/documents.');
+    });
+  });
   $('pick').addEventListener('click', function () { $('fileInput').click(); });
   $('fileInput').addEventListener('change', function (e) { addFiles(e.target.files); e.target.value = ''; });
   $('clear').addEventListener('click', function () { files = []; asked = {}; closeViewer(); recompute(); });
